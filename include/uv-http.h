@@ -17,6 +17,8 @@ typedef struct uv_http_conn_s uv_http_conn_t;
 
 typedef enum uv_http_event
 {
+    UV_HTTP_ERROR,      /**< (const char*) Error. */
+    UV_HTTP_CONNECT,    /**< Connection establish. */
     UV_HTTP_ACCEPT,     /**< Connection accept. */
     UV_HTTP_MESSAGE,    /**< (#uv_http_message_t) HTTP request/response */
     UV_HTTP_CLOSE,      /**< Connection closed. */
@@ -38,15 +40,15 @@ typedef struct uv_http_str
 
 typedef struct uv_http_list_node_s
 {
-    struct uv_http_list_node_s* p_after;    /**< Pointer to next node */
-    struct uv_http_list_node_s* p_before;   /**< Pointer to previous node */
+    struct uv_http_list_node_s* p_after;        /**< Pointer to next node */
+    struct uv_http_list_node_s* p_before;       /**< Pointer to previous node */
 } uv_http_list_node_t;
 
 typedef struct uv_http_list_s
 {
-    uv_http_list_node_t*        head;       /**< Pointer to HEAD node */
-    uv_http_list_node_t*        tail;       /**< Pointer to TAIL node */
-    size_t                      size;       /**< The number of total nodes */
+    uv_http_list_node_t*        head;           /**< Pointer to HEAD node */
+    uv_http_list_node_t*        tail;           /**< Pointer to TAIL node */
+    size_t                      size;           /**< The number of total nodes */
 } uv_http_list_t;
 
 typedef struct
@@ -88,11 +90,11 @@ typedef struct uv_http_fs
 
 typedef struct uv_http_serve_cfg
 {
-    const char*         root_path;          /**< Web root directory, must be non-NULL. */
-    const char*         ssi_pattern;        /**< (Optional) SSI file name pattern. */
-    const char*         extra_headers;      /**< (Optional) Extra HTTP headers to add in responses. */
-    const char*         page404;            /**< (Optional) Path to the 404 page. */
-    uv_http_fs_t*       fs;                 /**< (Optional) Filesystem instance. */
+    const char*                 root_path;          /**< Web root directory, must be non-NULL. */
+    const char*                 ssi_pattern;        /**< (Optional) SSI file name pattern. */
+    const char*                 extra_headers;      /**< (Optional) Extra HTTP headers to add in responses. */
+    const char*                 page404;            /**< (Optional) Path to the 404 page. */
+    uv_http_fs_t*               fs;                 /**< (Optional) Filesystem instance. */
 } uv_http_serve_cfg_t;
 
 /**
@@ -113,15 +115,15 @@ typedef void (*uv_http_close_cb)(uv_http_t* http);
 
 struct uv_http_s
 {
-    uv_loop_t*              loop;           /**< Event loop. */
+    uv_loop_t*                  loop;           /**< Event loop. */
 
-    uv_tcp_t                listen_sock;    /**< Listening socket. */
-    uv_http_list_t          client_table;   /**< (#uv_http_conn_t) Connection table. */
+    uv_tcp_t                    listen_sock;    /**< Listening socket. */
+    uv_http_list_t              client_table;   /**< (#uv_http_conn_t) Connection table. */
 
-    uv_http_cb              cb;             /**< Event callback. */
-    void*                   arg;            /**< User defined data passed to cb. */
+    uv_http_cb                  cb;             /**< Event callback. */
+    void*                       arg;            /**< User defined data passed to cb. */
 
-    uv_http_close_cb        close_cb;       /**< Close callback. */
+    uv_http_close_cb            close_cb;       /**< Close callback. */
 };
 
 /**
@@ -149,6 +151,23 @@ void uv_http_exit(uv_http_t* http, uv_http_close_cb cb);
 int uv_http_listen(uv_http_t* http, const char* url, uv_http_cb cb, void* arg);
 
 /**
+ * @brief Connect to \p url.
+ * @param[in] http  HTTP Component instance.
+ * @param[in] url   URL to connect.
+ * @param[in] cb    Connect callback.
+ * @param[in] arg   User defined data passed to callback.
+ * @return          UV error code.
+ */
+int uv_http_connect(uv_http_t* http, const char* url, uv_http_cb cb, void* arg);
+
+/**
+ * @brief Close HTTP connection.
+ * @param[in] conn  HTTP connection.
+ * @return          UV error code.
+ */
+int uv_http_close(uv_http_conn_t* conn);
+
+/**
  * @brief Send data on http connection.
  * @param[in] conn  HTTP connection.
  * @param[in] data  Data.
@@ -156,6 +175,20 @@ int uv_http_listen(uv_http_t* http, const char* url, uv_http_cb cb, void* arg);
  * @return          UV error code.
  */
 int uv_http_send(uv_http_conn_t* conn, const void* data, size_t size);
+
+/**
+ * @brief Send HTTP request.
+ * @param[in] conn          HTTP connection.
+ * @param[in] method        HTTP request method.
+ * @param[in] url           HTTP request url.
+ * @param[in] body          Request body.
+ * @param[in] body_sz       Request body size.
+ * @param[in] header_fmt    Extra header format.
+ * @param[in] ...           Extra header format argument list.
+ * @return                  UV error code.
+ */
+int uv_http_query(uv_http_conn_t* conn, const char* method, const char* url,
+    const void* body, size_t body_sz, const char* header_fmt, ...);
 
 /**
  * @brief Send HTTP response.
@@ -196,6 +229,15 @@ uv_http_str_t* uv_http_get_header(uv_http_message_t* msg, const char* name);
  * @return          UV error code.
  */
 int uv_http_get_listen_address(uv_http_t* http, char* buf, size_t size, int* port);
+
+/**
+ * @brief Get listen url.
+ * @param http
+ * @param buf
+ * @param size
+ * @return
+ */
+int uv_http_get_listen_url(uv_http_t* http, char* buf, size_t size);
 
 #ifdef __cplusplus
 }
