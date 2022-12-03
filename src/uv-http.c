@@ -4,6 +4,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <inttypes.h>
 
 /**
  * @brief Declare a constant string.
@@ -109,6 +110,7 @@ struct uv_http_conn_s
 
 typedef struct uv_http_serve_dir_helper_s
 {
+    int                         error_code;
     uv_http_serve_token_t*      token;
     uv_http_str_t*              path;
     uv_http_str_t*              body;
@@ -1028,7 +1030,8 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
     return 0;
 }
 
-static void s_uv_http_active_connection_serve_file(uv_http_serve_token_t* token, uv_http_str_t* file)
+static void s_uv_http_active_connection_serve_file(uv_http_conn_t* conn,
+    uv_http_serve_token_t* token, uv_http_str_t* file)
 {
     /* Try to serve file. */
     int ret = s_uv_http_active_connection_serve_file_once(token, file);
@@ -1045,8 +1048,14 @@ static void s_uv_http_active_connection_serve_file(uv_http_serve_token_t* token,
     }
 
     /* Pure 404 response. */
-    static uv_http_str_t str_not_found = { "Not found", 9, 0 };
-    s_uv_http_gen_reply(&token->rsp, 404, &str_not_found, "%s", token->extra_headers.ptr);
+    static uv_http_str_t str_not_found = UV_HTTP_CSTR("Not found");
+    ret = s_uv_http_gen_reply(&token->rsp, 404, &str_not_found,
+        "%s", token->extra_headers.ptr);
+    if (ret != 0)
+    {
+        s_uv_http_callback(conn, UV_HTTP_ERROR, (void*)uv_strerror(ret));
+        s_uv_http_close_connection(conn, 1);
+    }
 }
 
 static int s_uv_http_url_safe(char c)
@@ -1117,6 +1126,11 @@ static void s_uv_http_active_connection_serve_dir_on_list(const char* path, void
     uv_http_serve_dir_helper_t* helper = arg;
     uv_http_fs_t* fs = helper->token->fs;
 
+    if (helper->error_code != 0)
+    {
+        return;
+    }
+
     snprintf(buf, sizeof(buf), "%s/%s", helper->path->ptr, path);
 
     size_t size; time_t mtime;
@@ -1138,28 +1152,39 @@ static void s_uv_http_active_connection_serve_dir_on_list(const char* path, void
     }
     else
     {
-        snprintf(sz, sizeof(sz), "%llu", (unsigned long long)size);
+        snprintf(sz, sizeof(sz), "%" PRId64, size);
     }
 
     uv_http_str_t tmp_path = s_uv_http_str(path);
     uv_http_str_t encoded_path = UV_HTTP_STR_INIT;
-    s_uv_http_url_encode(&tmp_path, &encoded_path);
+    if ((ret = s_uv_http_url_encode(&tmp_path, &encoded_path)) != 0)
+    {
+        helper->error_code = ret;
+        goto finish;
+    }
 
-    s_uv_http_str_printf(helper->body,
-                         "<tr>"
-                         "<td><a href=\"%s%s\">%s%s</a></td>"
-                         "<td name=%lu>%lu</td>"
-                         "<td name=%lld>%s</td>"
-                         "</tr>",
-                         encoded_path.ptr, slash, path, slash,
-                         (unsigned long) mtime, (unsigned long) mtime,
-                         t_size, sz);
+    ret = s_uv_http_str_printf(helper->body,
+        "<tr>"
+        "<td><a href=\"%s%s\">%s%s</a></td>"
+        "<td name=%lu>%lu</td>"
+        "<td name=%" PRId64 ">%s</td>"
+        "</tr>",
+        encoded_path.ptr, slash, path, slash,
+        (unsigned long) mtime, (unsigned long) mtime,
+        t_size, sz);
+    if (ret < 0)
+    {
+        helper->error_code = ret;
+    }
 
+finish:
     s_uv_http_str_destroy(&encoded_path);
 }
 
-static void s_uv_http_active_connection_serve_dir(uv_http_serve_token_t* token, uv_http_str_t* path)
+static int s_uv_http_active_connection_serve_dir(uv_http_conn_t* conn,
+    uv_http_serve_token_t* token, uv_http_str_t* path)
 {
+    int ret;
     uv_http_fs_t* fs = token->fs;
     const char* sort_js_code =
         "<script>function srt(tb, sc, so, d) {"
@@ -1185,7 +1210,7 @@ static void s_uv_http_active_connection_serve_dir(uv_http_serve_token_t* token, 
         "</script>";
 
     uv_http_str_t body = UV_HTTP_STR_INIT;
-    s_uv_http_str_printf(&body,
+    ret = s_uv_http_str_printf(&body,
         "<!DOCTYPE html><html><head><title>Index of %.*s</title>%s"
         "<style>th,td {text-align: left; padding-right: 1em; "
         "font-family: monospace; }</style></head>"
@@ -1200,17 +1225,42 @@ static void s_uv_http_active_connection_serve_dir(uv_http_serve_token_t* token, 
         "<td name=-1></td><td name=-1>[DIR]</td></tr>\n",
         (int) token->url.len, token->url.ptr, sort_js_code,
         (int) token->url.len, token->url.ptr);
+    if (ret < 0)
+    {
+        goto error;
+    }
 
-    uv_http_serve_dir_helper_t helper = { token, path, &body };
+    uv_http_serve_dir_helper_t helper = { 0, token, path, &body };
     fs->ls(fs, path->ptr, s_uv_http_active_connection_serve_dir_on_list, &helper);
+    if (helper.error_code != 0)
+    {
+        ret = helper.error_code;
+        goto error;
+    }
 
-    s_uv_http_str_printf(&body,
+    ret = s_uv_http_str_printf(&body,
         "</tbody><tfoot><tr><td colspan=\"3\"><hr></td></tr></tfoot>"
         "</table><address>Mongoose v.%s</address></body></html>\n", "7.8");
+    if (ret < 0)
+    {
+        goto error;
+    }
 
-    s_uv_http_gen_reply(&token->rsp, 200, &body,
+    ret = s_uv_http_gen_reply(&token->rsp, 200, &body,
         "%sContent-Type: text/html; charset=utf-8\r\n",
         token->extra_headers.ptr);
+    if (ret != 0)
+    {
+        goto error;
+    }
+    goto finish;
+
+error:
+    s_uv_http_callback(conn, UV_HTTP_ERROR, (void*)uv_strerror(ret));
+    s_uv_http_close_connection(conn, 1);
+finish:
+    s_uv_http_str_destroy(&body);
+    return ret;
 }
 
 static void s_uv_http_active_connection_send_file(uv_work_t* req)
@@ -1304,18 +1354,21 @@ error:
 static void s_uv_http_active_connection_serve_work(uv_work_t* req)
 {
     uv_http_serve_token_t* token = container_of(req, uv_http_serve_token_t, req);
+    uv_http_action_t* action = container_of(token, uv_http_action_t, as.serve);
+    uv_http_conn_t* conn = action->belong;
     uv_http_fs_t* fs = token->fs;
+
     int flags = fs->stat(fs, token->url.ptr, NULL, NULL);
 
     /* If it is a directory, list entry. */
     if (flags & UV_HTTP_FS_DIR)
     {
-        s_uv_http_active_connection_serve_dir(token, &token->url);
+        s_uv_http_active_connection_serve_dir(conn, token, &token->url);
         return;
     }
 
     /* If it is a file, serve with file support. */
-    s_uv_http_active_connection_serve_file(token, &token->url);
+    s_uv_http_active_connection_serve_file(conn, token, &token->url);
 }
 
 static void s_uv_http_active_connection_serve_after_work(uv_work_t* req, int status)
@@ -1772,8 +1825,8 @@ int uv_http_serve_dir(uv_http_conn_t* conn, uv_http_message_t* msg,
     size_t range_len = range->len;
 
     size_t malloc_size = sizeof(uv_http_action_t) + msg->method.len + 1 + msg->url.len + 1
-                         + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1 + page404_len + 1
-                         + if_none_match_len + 1 + range_len + 1;
+        + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1 + page404_len + 1
+        + if_none_match_len + 1 + range_len + 1;
     uv_http_action_t* action = malloc(malloc_size);
     if (action == NULL)
     {
