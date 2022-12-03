@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.2)
 
 add_executable(uvhttp_test
+    src/cases/file_server.c
     src/cases/simple_server.c
     src/main.c)
 

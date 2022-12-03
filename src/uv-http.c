@@ -694,12 +694,29 @@ error:
     s_uv_http_close_connection(conn, 0);
 }
 
+static void s_uv_http_destroy_action_serve(uv_http_serve_token_t* token)
+{
+    s_uv_http_str_destroy(&token->rsp);
+
+    if (token->fd != NULL)
+    {
+        token->fs->close(token->fs, token->fd);
+        token->fd = NULL;
+    }
+
+    token->fs->release(token->fs);
+}
+
 static void s_uv_http_destroy_action(uv_http_action_t* action)
 {
     switch (action->type)
     {
     case UV_HTTP_ACTION_SEND:
         s_uv_http_str_destroy(&action->as.send.data);
+        break;
+
+    case UV_HTTP_ACTION_SERVE:
+        s_uv_http_destroy_action_serve(&action->as.serve);
         break;
 
     default:
