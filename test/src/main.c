@@ -10,5 +10,6 @@ static void _at_exit(void)
 int main(int argc, char* argv[])
 {
     atexit(_at_exit);
+    argv = uv_setup_args(argc, argv);
     return cutest_run_tests(argc, argv, NULL);
 }

@@ -7,6 +7,7 @@ typedef struct test_file_server
 {
     uv_loop_t   loop;
     uv_http_t   http;
+    char        exe_path[PATH_MAX];
 } test_file_server_t;
 
 static test_file_server_t* s_test_file_server = NULL;
@@ -24,10 +25,13 @@ static void s_test_file_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
             return;
         }
 
-        uv_http_serve_cfg_t cfg; memset(&cfg, 0, sizeof(cfg));
-        cfg.root_path = ".";
+        size_t exe_path_size = sizeof(s_test_file_server->exe_path);
+        ASSERT_EQ_D32(uv_exepath(s_test_file_server->exe_path, &exe_path_size), 0);
 
-        ASSERT_EQ_D32(uv_http_serve_dir(conn, msg, &cfg), 0);
+        uv_http_serve_cfg_t cfg; memset(&cfg, 0, sizeof(cfg));
+        cfg.root_path = s_test_file_server->exe_path;
+
+        ASSERT_EQ_D32(uv_http_serve_file(conn, msg, &cfg), 0);
     }
 }
 

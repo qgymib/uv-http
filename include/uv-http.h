@@ -214,6 +214,16 @@ int uv_http_serve_dir(uv_http_conn_t* conn, uv_http_message_t* msg,
     uv_http_serve_cfg_t* cfg);
 
 /**
+ * @brief Generate serve file response message.
+ * @param[in] conn  HTTP connection.
+ * @param[in] msg   HTTP incoming message.
+ * @param[in] cfg   Serve dir options.
+ * @return          UV error code.
+ */
+int uv_http_serve_file(uv_http_conn_t* conn, uv_http_message_t* msg,
+    uv_http_serve_cfg_t* cfg);
+
+/**
  * @brief Get header value.
  * @param[in] msg   HTTP message.
  * @param[in] name  Field name

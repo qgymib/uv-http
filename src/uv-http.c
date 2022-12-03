@@ -59,6 +59,7 @@ typedef struct uv_http_serve_token_s
 {
     uv_work_t                   req;            /**< Request token. */
 
+    int                         isdir;          /**< Directory flag. */
     uv_http_str_t               method;         /**< METHOD. No need to free. */
     uv_http_str_t               url;            /**< URL. No need to free. */
     uv_http_str_t               root_path;      /**< Root path. No need to free. */
@@ -198,6 +199,125 @@ static uv_http_list_node_t* ev_list_pop_front(uv_http_list_t* handler)
 
     ev_list_erase(handler, node);
     return node;
+}
+
+static void s_uv_http_fs_release(struct uv_http_fs* self)
+{
+    (void)self;
+}
+
+static int s_uv_http_fs_stat(struct uv_http_fs* self, const char* path, size_t* size, time_t* mtime)
+{
+    (void)self;
+#if defined(_WIN32)
+    struct _stat st;
+    if (_stat(path, &st) != 0)
+    {
+        return 0;
+    }
+    int is_dir = st.st_mode & _S_IFDIR;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+    {
+        return 0;
+    }
+    int is_dir = S_ISDIR(st.st_mode);
+#endif
+
+    if (size != NULL)
+    {
+        *size = st.st_size;
+    }
+    if (mtime != NULL)
+    {
+        *mtime = st.st_mtime;
+    }
+    return UV_HTTP_FS_READ | UV_HTTP_FS_WRITE | (is_dir ? UV_HTTP_FS_DIR : 0);
+}
+
+static void s_uv_http_fs_ls(struct uv_http_fs* self, const char* path,
+    void (*cb)(const char* path, void* arg), void* arg)
+{
+    (void)self;
+#if defined(_WIN32)
+
+    uv_http_str_t fix_path = UV_HTTP_STR_INIT;
+    _uv_http_str_printf(&fix_path, "%s/*", path);
+
+    WIN32_FIND_DATAA find_data;
+    HANDLE dp = FindFirstFileA(fix_path.ptr, &find_data);
+    _uv_http_str_destroy(&fix_path);
+    if (dp == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+
+    do
+    {
+        if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0)
+        {
+            continue;
+        }
+        cb(find_data.cFileName, arg);
+    } while (FindNextFileA(dp, &find_data));
+
+    FindClose(dp);
+
+#else
+    DIR* dir;
+    struct dirent* dp;
+
+    if ((dir = opendir(path)) == NULL)
+    {
+        return;
+    }
+
+    while ((dp = readdir(dir)) != NULL)
+    {
+        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
+        {
+            continue;
+        }
+        cb(dp->d_name, arg);
+    }
+    closedir(dir);
+#endif
+}
+
+static void* s_uv_http_fs_open(struct uv_http_fs* self, const char* path, int flags)
+{
+    (void)self;
+    const char* mode = flags == UV_HTTP_FS_READ ? "rb" : "a+b";
+    return (void*)fopen(path, mode);
+}
+
+static void s_uv_http_fs_close(struct uv_http_fs* self, void* fd)
+{
+    (void)self;
+    fclose((FILE*)fd);
+}
+
+static int s_uv_http_fs_read(struct uv_http_fs* self, void* fd, void* buf, size_t size)
+{
+    (void)self;
+    return fread(buf, 1, size, (FILE*)fd);
+}
+
+static int s_uv_http_fs_write(struct uv_http_fs* self, void* fd, void* buf, size_t size)
+{
+    (void)self;
+    return fwrite(buf, 1, size, (FILE*)fd);
+}
+
+static int s_uv_http_fs_seek(struct uv_http_fs* self, void* fd, size_t offset)
+{
+    (void)self;
+    if (fseek(fd, offset, SEEK_SET) != 0)
+    {
+        return uv_translate_sys_error(errno);
+    }
+    return 0;
 }
 
 static void s_uv_http_str_destroy(uv_http_str_t* str)
@@ -1289,9 +1409,18 @@ static void s_uv_http_active_connection_send_file(uv_work_t* req)
         abort();
     }
 
+    token->rsp.len = read_size;
     token->remain_size -= read_size;
 }
 
+/**
+ * @brief Send \p data for \p conn.
+ * @warning This function take ownership of \p data, the content of \p data
+ *   will be reset if success.
+ * @param[in] conn  HTTP connection.
+ * @param[in] data  Data to send.
+ * @return          UV error code.
+ */
 static int s_uv_http_send(uv_http_conn_t* conn, uv_http_str_t* data)
 {
     uv_http_action_t* action = malloc(sizeof(uv_http_action_t));
@@ -1303,6 +1432,9 @@ static int s_uv_http_send(uv_http_conn_t* conn, uv_http_str_t* data)
     action->type = UV_HTTP_ACTION_SEND;
     action->belong = conn;
     action->as.send.data = *data;
+
+    /* We have take ownership of data */
+    *data = (uv_http_str_t)UV_HTTP_STR_INIT;
 
     ev_list_push_back(&conn->action_queue, &action->node);
     return s_uv_http_active_connection(conn);
@@ -1358,6 +1490,14 @@ static void s_uv_http_active_connection_serve_work(uv_work_t* req)
     uv_http_conn_t* conn = action->belong;
     uv_http_fs_t* fs = token->fs;
 
+    /* If serve file, send file directly. */
+    if (!token->isdir)
+    {
+        s_uv_http_active_connection_serve_file(conn, token, &token->root_path);
+        return;
+    }
+
+    /* Let's check what user want. */
     int flags = fs->stat(fs, token->url.ptr, NULL, NULL);
 
     /* If it is a directory, list entry. */
@@ -1396,6 +1536,7 @@ static void s_uv_http_active_connection_serve_after_work(uv_work_t* req, int sta
         {
             goto error;
         }
+        return;
     }
 
     /* Nothing left to do, let's try next action. */
@@ -1535,123 +1676,109 @@ static void s_uv_http_on_connect(uv_connect_t* req, int status)
     s_uv_http_callback(conn, UV_HTTP_CONNECT, NULL);
 }
 
-static void s_uv_http_fs_release(struct uv_http_fs* self)
+static int s_uv_http_serve(uv_http_conn_t* conn, uv_http_message_t* msg,
+    uv_http_serve_cfg_t* cfg, int isdir)
 {
-    (void)self;
-}
+    static uv_http_fs_t s_builtin_fs = {
+        s_uv_http_fs_release,
+        s_uv_http_fs_stat,
+        s_uv_http_fs_ls,
+        s_uv_http_fs_open,
+        s_uv_http_fs_close,
+        s_uv_http_fs_read,
+        s_uv_http_fs_write,
+        s_uv_http_fs_seek,
+    };
 
-static int s_uv_http_fs_stat(struct uv_http_fs* self, const char* path, size_t* size, time_t* mtime)
-{
-    (void)self;
-#if defined(_WIN32)
-    struct _stat st;
-    if (_stat(path, &st) != 0)
+    char* pos;
+    uv_http_str_t* if_none_match = uv_http_get_header(msg, "If-None-Match");
+    if_none_match = if_none_match != NULL ? if_none_match : &s_empty_str;
+    uv_http_str_t* range = uv_http_get_header(msg, "Range");
+    range = range != NULL ? range : &s_empty_str;
+
+    size_t root_path_len = strlen(cfg->root_path);
+    size_t ssi_pattern_len = cfg->ssi_pattern != NULL ? strlen(cfg->ssi_pattern) : 0;
+    size_t extra_headers_len = cfg->extra_headers != NULL ? strlen(cfg->extra_headers) : 0;
+    size_t page404_len = cfg->page404 != NULL ? strlen(cfg->page404) : 0;
+    size_t if_none_match_len = if_none_match->len ;
+    size_t range_len = range->len;
+
+    size_t malloc_size = sizeof(uv_http_action_t) + msg->method.len + 1 + msg->url.len + 1
+        + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1 + page404_len + 1
+        + if_none_match_len + 1 + range_len + 1;
+    uv_http_action_t* action = malloc(malloc_size);
+    if (action == NULL)
     {
-        return 0;
+        return UV_ENOMEM;
     }
-    int is_dir = st.st_mode & _S_IFDIR;
-#else
-    struct stat st;
-    if (stat(path, &st) != 0)
-    {
-        return 0;
-    }
-    int is_dir = S_ISDIR(st.st_mode);
-#endif
+    memset(&action->as.serve, 0, sizeof(action->as.serve));
 
-    if (size != NULL)
-    {
-        *size = st.st_size;
-    }
-    if (mtime != NULL)
-    {
-        *mtime = st.st_mtime;
-    }
-    return UV_HTTP_FS_READ | UV_HTTP_FS_WRITE | (is_dir ? UV_HTTP_FS_DIR : 0);
-}
+    action->belong = conn;
+    action->type = UV_HTTP_ACTION_SERVE;
+    action->as.serve.isdir = isdir;
+    pos = (char*)(action + 1);
 
-static void s_uv_http_fs_ls(struct uv_http_fs* self, const char* path,
-    void (*cb)(const char* path, void* arg), void* arg)
-{
-    (void)self;
-#if defined(_WIN32)
+    action->as.serve.method.cap = 0;
+    action->as.serve.method.len = msg->method.len;
+    action->as.serve.method.ptr = pos;
+    memcpy(action->as.serve.method.ptr, msg->method.ptr, msg->method.len);
+    action->as.serve.method.ptr[action->as.serve.method.len] = '\0';
+    pos += msg->method.len + 1;
 
-    uv_http_str_t fix_path = UV_HTTP_STR_INIT;
-    _uv_http_str_printf(&fix_path, "%s/*", path);
+    action->as.serve.url.cap = 0;
+    action->as.serve.url.len = msg->url.len;
+    action->as.serve.url.ptr = pos;
+    memcpy(action->as.serve.url.ptr, msg->url.ptr, msg->url.len);
+    action->as.serve.url.ptr[action->as.serve.url.len] = '\0';
+    pos += msg->url.len + 1;
 
-    WIN32_FIND_DATAA find_data;
-    HANDLE dp = FindFirstFileA(fix_path.ptr, &find_data);
-    _uv_http_str_destroy(&fix_path);
-    if (dp == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
+    action->as.serve.root_path.cap = 0;
+    action->as.serve.root_path.len = root_path_len;
+    action->as.serve.root_path.ptr = pos;
+    memcpy(action->as.serve.root_path.ptr, cfg->root_path, root_path_len);
+    action->as.serve.root_path.ptr[root_path_len] = '\0';
+    pos += root_path_len + 1;
 
-    do
-    {
-        if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0)
-        {
-            continue;
-        }
-        cb(find_data.cFileName, arg);
-    } while (FindNextFileA(dp, &find_data));
+    action->as.serve.ssi_pattern.cap = 0;
+    action->as.serve.ssi_pattern.len = ssi_pattern_len;
+    action->as.serve.ssi_pattern.ptr = pos;
+    memcpy(action->as.serve.ssi_pattern.ptr, cfg->ssi_pattern, ssi_pattern_len);
+    action->as.serve.ssi_pattern.ptr[ssi_pattern_len] = '\0';
+    pos += ssi_pattern_len + 1;
 
-    FindClose(dp);
+    action->as.serve.extra_headers.cap = 0;
+    action->as.serve.extra_headers.len = extra_headers_len;
+    action->as.serve.extra_headers.ptr = pos;
+    memcpy(action->as.serve.extra_headers.ptr, cfg->extra_headers, extra_headers_len);
+    action->as.serve.extra_headers.ptr[extra_headers_len] = '\0';
+    pos += extra_headers_len + 1;
 
-#else
-    DIR* dir;
-    struct dirent* dp;
+    action->as.serve.page404.cap = 0;
+    action->as.serve.page404.len = page404_len;
+    action->as.serve.page404.ptr = pos;
+    memcpy(action->as.serve.page404.ptr, cfg->page404, page404_len);
+    action->as.serve.page404.ptr[page404_len] = '\0';
+    pos += page404_len + 1;
 
-    if ((dir = opendir(path)) == NULL)
-    {
-        return;
-    }
+    action->as.serve.if_none_match.cap = 0;
+    action->as.serve.if_none_match.len = if_none_match_len;
+    action->as.serve.if_none_match.ptr = pos;
+    memcpy(action->as.serve.if_none_match.ptr, if_none_match->ptr, if_none_match_len);
+    action->as.serve.if_none_match.ptr[if_none_match_len] = '\0';
+    pos += if_none_match_len + 1;
 
-    while ((dp = readdir(dir)) != NULL)
-    {
-        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
-        {
-            continue;
-        }
-        cb(dp->d_name, arg);
-    }
-    closedir(dir);
-#endif
-}
+    action->as.serve.range.cap = 0;
+    action->as.serve.range.len = range_len;
+    action->as.serve.range.ptr = pos;
+    memcpy(action->as.serve.range.ptr, range->ptr, range_len);
+    action->as.serve.range.ptr[range_len] = '\0';
+    pos += range_len + 1;
 
-static void* s_uv_http_fs_open(struct uv_http_fs* self, const char* path, int flags)
-{
-    (void)self;
-    const char* mode = flags == UV_HTTP_FS_READ ? "rb" : "a+b";
-    return (void*)fopen(path, mode);
-}
+    action->as.serve.fs = cfg->fs != NULL ? cfg->fs : &s_builtin_fs;
+    action->as.serve.rsp = (uv_http_str_t)UV_HTTP_STR_INIT;
 
-static void s_uv_http_fs_close(struct uv_http_fs* self, void* fd)
-{
-    (void)self;
-    fclose((FILE*)fd);
-}
-
-static int s_uv_http_fs_read(struct uv_http_fs* self, void* fd, void* buf, size_t size)
-{
-    (void)self;
-    return fread(buf, 1, size, (FILE*)fd);
-}
-
-static int s_uv_http_fs_write(struct uv_http_fs* self, void* fd, void* buf, size_t size)
-{
-    (void)self;
-    return fwrite(buf, 1, size, (FILE*)fd);
-}
-
-static int s_uv_http_fs_seek(struct uv_http_fs* self, void* fd, size_t offset)
-{
-    (void)self;
-    if (fseek(fd, offset, SEEK_SET) != 0)
-    {
-        return uv_translate_sys_error(errno);
-    }
-    return 0;
+    ev_list_push_back(&conn->action_queue, &action->node);
+    return s_uv_http_active_connection(conn);
 }
 
 int uv_http_init(uv_http_t* http, uv_loop_t* loop)
@@ -1800,105 +1927,13 @@ int uv_http_reply(uv_http_conn_t* conn, int status_code,
 int uv_http_serve_dir(uv_http_conn_t* conn, uv_http_message_t* msg,
     uv_http_serve_cfg_t* cfg)
 {
-    static uv_http_fs_t s_builtin_fs = {
-        s_uv_http_fs_release,
-        s_uv_http_fs_stat,
-        s_uv_http_fs_ls,
-        s_uv_http_fs_open,
-        s_uv_http_fs_close,
-        s_uv_http_fs_read,
-        s_uv_http_fs_write,
-        s_uv_http_fs_seek,
-    };
+    return s_uv_http_serve(conn, msg, cfg, 1);
+}
 
-    char* pos;
-    uv_http_str_t* if_none_match = uv_http_get_header(msg, "If-None-Match");
-    if_none_match = if_none_match != NULL ? if_none_match : &s_empty_str;
-    uv_http_str_t* range = uv_http_get_header(msg, "Range");
-    range = range != NULL ? range : &s_empty_str;
-
-    size_t root_path_len = strlen(cfg->root_path);
-    size_t ssi_pattern_len = cfg->ssi_pattern != NULL ? strlen(cfg->ssi_pattern) : 0;
-    size_t extra_headers_len = cfg->extra_headers != NULL ? strlen(cfg->extra_headers) : 0;
-    size_t page404_len = cfg->page404 != NULL ? strlen(cfg->page404) : 0;
-    size_t if_none_match_len = if_none_match->len ;
-    size_t range_len = range->len;
-
-    size_t malloc_size = sizeof(uv_http_action_t) + msg->method.len + 1 + msg->url.len + 1
-        + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1 + page404_len + 1
-        + if_none_match_len + 1 + range_len + 1;
-    uv_http_action_t* action = malloc(malloc_size);
-    if (action == NULL)
-    {
-        return UV_ENOMEM;
-    }
-    memset(&action->as.serve, 0, sizeof(action->as.serve));
-
-    action->belong = conn;
-    action->type = UV_HTTP_ACTION_SERVE;
-    pos = (char*)(action + 1);
-
-    action->as.serve.method.cap = 0;
-    action->as.serve.method.len = msg->method.len;
-    action->as.serve.method.ptr = pos;
-    memcpy(action->as.serve.method.ptr, msg->method.ptr, msg->method.len);
-    action->as.serve.method.ptr[action->as.serve.method.len] = '\0';
-    pos += msg->method.len + 1;
-
-    action->as.serve.url.cap = 0;
-    action->as.serve.url.len = msg->url.len;
-    action->as.serve.url.ptr = pos;
-    memcpy(action->as.serve.url.ptr, msg->url.ptr, msg->url.len);
-    action->as.serve.url.ptr[action->as.serve.url.len] = '\0';
-    pos += msg->url.len + 1;
-
-    action->as.serve.root_path.cap = 0;
-    action->as.serve.root_path.len = root_path_len;
-    action->as.serve.root_path.ptr = pos;
-    memcpy(action->as.serve.root_path.ptr, cfg->root_path, root_path_len);
-    action->as.serve.root_path.ptr[root_path_len] = '\0';
-    pos += root_path_len + 1;
-
-    action->as.serve.ssi_pattern.cap = 0;
-    action->as.serve.ssi_pattern.len = ssi_pattern_len;
-    action->as.serve.ssi_pattern.ptr = pos;
-    memcpy(action->as.serve.ssi_pattern.ptr, cfg->ssi_pattern, ssi_pattern_len);
-    action->as.serve.ssi_pattern.ptr[ssi_pattern_len] = '\0';
-    pos += ssi_pattern_len + 1;
-
-    action->as.serve.extra_headers.cap = 0;
-    action->as.serve.extra_headers.len = extra_headers_len;
-    action->as.serve.extra_headers.ptr = pos;
-    memcpy(action->as.serve.extra_headers.ptr, cfg->extra_headers, extra_headers_len);
-    action->as.serve.extra_headers.ptr[extra_headers_len] = '\0';
-    pos += extra_headers_len + 1;
-
-    action->as.serve.page404.cap = 0;
-    action->as.serve.page404.len = page404_len;
-    action->as.serve.page404.ptr = pos;
-    memcpy(action->as.serve.page404.ptr, cfg->page404, page404_len);
-    action->as.serve.page404.ptr[page404_len] = '\0';
-    pos += page404_len + 1;
-
-    action->as.serve.if_none_match.cap = 0;
-    action->as.serve.if_none_match.len = if_none_match_len;
-    action->as.serve.if_none_match.ptr = pos;
-    memcpy(action->as.serve.if_none_match.ptr, if_none_match->ptr, if_none_match_len);
-    action->as.serve.if_none_match.ptr[if_none_match_len] = '\0';
-    pos += if_none_match_len + 1;
-
-    action->as.serve.range.cap = 0;
-    action->as.serve.range.len = range_len;
-    action->as.serve.range.ptr = pos;
-    memcpy(action->as.serve.range.ptr, range->ptr, range_len);
-    action->as.serve.range.ptr[range_len] = '\0';
-    pos += range_len + 1;
-
-    action->as.serve.fs = cfg->fs != NULL ? cfg->fs : &s_builtin_fs;
-    action->as.serve.rsp = (uv_http_str_t)UV_HTTP_STR_INIT;
-
-    ev_list_push_back(&conn->action_queue, &action->node);
-    return s_uv_http_active_connection(conn);
+int uv_http_serve_file(uv_http_conn_t* conn, uv_http_message_t* msg,
+    uv_http_serve_cfg_t* cfg)
+{
+    return s_uv_http_serve(conn, msg, cfg, 0);
 }
 
 uv_http_str_t* uv_http_get_header(uv_http_message_t* msg, const char* name)
