@@ -1184,11 +1184,11 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
     s_uv_http_guess_content_type(file, &token->mime_types, &mime);
 
     /* Check etag. */
-    snprintf(etag, sizeof(etag), "\"%lld.%lld\"", (long long)mtime, (long long)size);
+    snprintf(etag, sizeof(etag), "\"%lld.%zu\"", (long long)mtime, size);
     if (strcasecmp(etag, token->if_none_match.ptr) == 0)
     {
         fs->close(fs, fd);
-        s_uv_http_gen_reply(&token->rsp, 304, NULL, "%s", token->extra_headers.ptr);
+        token->error_code = s_uv_http_gen_reply(&token->rsp, 304, NULL, "%s", token->extra_headers.ptr);
         return 0;
     }
 
@@ -1199,14 +1199,15 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
         size_t beg, end;
         if ((ret = s_uv_http_parse_range(&token->range, size, &beg, &end)) != 0)
         {
-            s_uv_http_gen_reply(&token->rsp, 416, NULL,
+            fs->close(fs, fd);
+
+            token->error_code = s_uv_http_gen_reply(&token->rsp, 416, NULL,
                 "ETag: %s\r\n"
                 "Content-Range: bytes */%zu\r\n"
                 "%.*s\r\n",
                 etag,
                 content_length,
                 token->extra_headers.len, token->extra_headers.ptr);
-            fs->close(fs, fd);
             return 0;
         }
 
@@ -1217,7 +1218,7 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
         fs->seek(fs, fd, beg);
     }
 
-    s_uv_http_str_printf(&token->rsp,
+    ret = s_uv_http_str_printf(&token->rsp,
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %.*s\r\n"
         "Etag: %s\r\n"
@@ -1231,6 +1232,12 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
         content_length,
         range,
         (int) token->extra_headers.len, token->extra_headers.ptr);
+    if (ret < 0)
+    {
+        token->error_code = ret;
+        fs->close(fs, fd);
+        return 0;
+    }
 
     if (strcmp(token->method.ptr, "HEAD") == 0)
     {
@@ -1608,14 +1615,22 @@ static void s_uv_http_active_connection_serve_work(uv_work_t* req)
 static void s_uv_http_active_connection_serve_after_work(uv_work_t* req, int status)
 {
     (void)status;
+
+    int ret;
     uv_http_serve_token_t* token = container_of(req, uv_http_serve_token_t, req);
     uv_http_action_t* action = container_of(token, uv_http_action_t, as.serve);
     uv_http_conn_t* conn = action->belong;
     uv_http_t* http = conn->belong;
 
+    /* Check if we have any error. */
+    if (token->error_code != 0)
+    {
+        ret = token->error_code;
+        goto error;
+    }
+
     /* Send response. */
-    int ret = uv_http_send(conn, token->rsp.ptr, token->rsp.len);
-    if (ret != 0)
+    if ((ret = uv_http_send(conn, token->rsp.ptr, token->rsp.len)) != 0)
     {
         goto error;
     }
@@ -1636,10 +1651,10 @@ static void s_uv_http_active_connection_serve_after_work(uv_work_t* req, int sta
     /* Nothing left to do, let's try next action. */
     s_uv_http_destroy_action(action);
     s_uv_http_active_connection(conn);
-
     return;
 
 error:
+    s_uv_http_callback(conn, UV_HTTP_ERROR, (void*)uv_strerror(ret));
     s_uv_http_destroy_action(action);
     s_uv_http_close_connection(conn, 1);
 }
