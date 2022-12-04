@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#   define PATH_MAX MAX_PATH
+#endif
+
 typedef struct test_file_server
 {
     uv_loop_t   loop;

@@ -43,6 +43,15 @@
 #endif
 #endif
 
+#if defined(_WIN32)
+#   define PATH_MAX                     MAX_PATH
+#   define strcasecmp(s1, s2)           _stricmp(s1, s2)
+#   define strncasecmp(s1, s2, n)       _strnicmp(s1, s2, n)
+#   define uv_http_sscanf(b, f, ...)    sscanf_s(b, f, ##__VA_ARGS__)
+#else
+#   define uv_http_sscanf(b, f, ...)    sscanf(b, f, ##__VA_ARGS__)
+#endif
+
 typedef enum uv_http_action_type_e
 {
     UV_HTTP_ACTION_SEND,
@@ -201,6 +210,86 @@ static uv_http_list_node_t* ev_list_pop_front(uv_http_list_t* handler)
     return node;
 }
 
+/**
+ * @brief Ensure \p str have enough capacity for \p size.
+ * @param[in] str   String container.
+ * @param[in] size  Required size, not including NULL terminator.
+ * @return          UV error code.
+ */
+static int s_uv_http_str_ensure_size(uv_http_str_t* str, size_t size)
+{
+    /* Check if it is a constant string. */
+    if (str->ptr != NULL && str->cap == 0)
+    {
+        abort();
+    }
+
+    if (str->cap >= size)
+    {
+        return 0;
+    }
+
+    size_t aligned_size = ALIGN_WITH(size + 1, sizeof(void*));
+    size_t double_cap = str->cap << 1;
+    size_t new_cap_plus_one = aligned_size > double_cap ? aligned_size : double_cap;
+
+    void* new_ptr = realloc(str->ptr, new_cap_plus_one);
+    if (new_ptr == NULL)
+    {
+        return UV_ENOMEM;
+    }
+
+    str->ptr = new_ptr;
+    str->cap = new_cap_plus_one - 1;
+    return 0;
+}
+
+static int s_uv_http_str_vprintf(uv_http_str_t* str, const char* fmt, va_list ap)
+{
+    va_list ap_bak;
+    va_copy(ap_bak, ap);
+    int ret = vsnprintf(NULL, 0, fmt, ap_bak);
+    va_end(ap_bak);
+
+    size_t required_cap = str->len + ret;
+    if (s_uv_http_str_ensure_size(str, required_cap) != 0)
+    {
+        return UV_ENOMEM;
+    }
+
+    if (vsnprintf(str->ptr + str->len, ret + 1, fmt, ap) != ret)
+    {
+        abort();
+    }
+    str->len += ret;
+
+    return ret;
+}
+
+static int s_uv_http_str_printf(uv_http_str_t* str, const char* fmt, ...)
+{
+    int ret;
+    va_list ap;
+    va_start(ap, fmt);
+    {
+        ret = s_uv_http_str_vprintf(str, fmt, ap);
+    }
+    va_end(ap);
+
+    return ret;
+}
+
+static void s_uv_http_str_destroy(uv_http_str_t* str)
+{
+    if (str->ptr != NULL && str->cap != 0)
+    {
+        free(str->ptr);
+    }
+    str->ptr = NULL;
+    str->len = 0;
+    str->cap = 0;
+}
+
 static void s_uv_http_fs_release(struct uv_http_fs* self)
 {
     (void)self;
@@ -243,11 +332,11 @@ static void s_uv_http_fs_ls(struct uv_http_fs* self, const char* path,
 #if defined(_WIN32)
 
     uv_http_str_t fix_path = UV_HTTP_STR_INIT;
-    _uv_http_str_printf(&fix_path, "%s/*", path);
+    s_uv_http_str_printf(&fix_path, "%s/*", path);
 
     WIN32_FIND_DATAA find_data;
     HANDLE dp = FindFirstFileA(fix_path.ptr, &find_data);
-    _uv_http_str_destroy(&fix_path);
+    s_uv_http_str_destroy(&fix_path);
     if (dp == INVALID_HANDLE_VALUE)
     {
         return;
@@ -289,7 +378,17 @@ static void* s_uv_http_fs_open(struct uv_http_fs* self, const char* path, int fl
 {
     (void)self;
     const char* mode = flags == UV_HTTP_FS_READ ? "rb" : "a+b";
+
+#if defined(_WIN32)
+    FILE* f;
+    if (fopen_s(&f, path, mode) != 0)
+    {
+        return NULL;
+    }
+    return (void*)f;
+#else
     return (void*)fopen(path, mode);
+#endif
 }
 
 static void s_uv_http_fs_close(struct uv_http_fs* self, void* fd)
@@ -301,67 +400,22 @@ static void s_uv_http_fs_close(struct uv_http_fs* self, void* fd)
 static int s_uv_http_fs_read(struct uv_http_fs* self, void* fd, void* buf, size_t size)
 {
     (void)self;
-    return fread(buf, 1, size, (FILE*)fd);
+    return (int)fread(buf, 1, size, (FILE*)fd);
 }
 
 static int s_uv_http_fs_write(struct uv_http_fs* self, void* fd, void* buf, size_t size)
 {
     (void)self;
-    return fwrite(buf, 1, size, (FILE*)fd);
+    return (int)fwrite(buf, 1, size, (FILE*)fd);
 }
 
 static int s_uv_http_fs_seek(struct uv_http_fs* self, void* fd, size_t offset)
 {
     (void)self;
-    if (fseek(fd, offset, SEEK_SET) != 0)
+    if (fseek(fd, (long)offset, SEEK_SET) != 0)
     {
         return uv_translate_sys_error(errno);
     }
-    return 0;
-}
-
-static void s_uv_http_str_destroy(uv_http_str_t* str)
-{
-    if (str->ptr != NULL && str->cap != 0)
-    {
-        free(str->ptr);
-    }
-    str->ptr = NULL;
-    str->len = 0;
-    str->cap = 0;
-}
-
-/**
- * @brief Ensure \p str have enough capacity for \p size.
- * @param[in] str   String container.
- * @param[in] size  Required size, not including NULL terminator.
- * @return          UV error code.
- */
-static int s_uv_http_str_ensure_size(uv_http_str_t* str, size_t size)
-{
-    /* Check if it is a constant string. */
-    if (str->ptr != NULL && str->cap == 0)
-    {
-        abort();
-    }
-
-    if (str->cap >= size)
-    {
-        return 0;
-    }
-
-    size_t aligned_size = ALIGN_WITH(size + 1, sizeof(void*));
-    size_t double_cap = str->cap << 1;
-    size_t new_cap_plus_one = aligned_size > double_cap ? aligned_size : double_cap;
-
-    void* new_ptr = realloc(str->ptr, new_cap_plus_one);
-    if (new_ptr == NULL)
-    {
-        return UV_ENOMEM;
-    }
-
-    str->ptr = new_ptr;
-    str->cap = new_cap_plus_one - 1;
     return 0;
 }
 
@@ -394,41 +448,6 @@ static int s_uv_http_str_append_c(uv_http_str_t* str, char c)
     str->ptr[required_size] = '\0';
 
     return 0;
-}
-
-static int s_uv_http_str_vprintf(uv_http_str_t* str, const char* fmt, va_list ap)
-{
-    va_list ap_bak;
-    va_copy(ap_bak, ap);
-    int ret = vsnprintf(NULL, 0, fmt, ap_bak);
-    va_end(ap_bak);
-
-    size_t required_cap = str->len + ret;
-    if (s_uv_http_str_ensure_size(str, required_cap) != 0)
-    {
-        return UV_ENOMEM;
-    }
-
-    if (vsnprintf(str->ptr + str->len, ret + 1, fmt, ap) != ret)
-    {
-        abort();
-    }
-    str->len += ret;
-
-    return ret;
-}
-
-static int s_uv_http_str_printf(uv_http_str_t* str, const char* fmt, ...)
-{
-    int ret;
-    va_list ap;
-    va_start(ap, fmt);
-    {
-        ret = s_uv_http_str_vprintf(str, fmt, ap);
-    }
-    va_end(ap);
-
-    return ret;
 }
 
 static void s_uv_http_default_cb(uv_http_conn_t* conn, uv_http_event_t evt,
@@ -483,7 +502,7 @@ static int s_uv_http_parse_url(const char* url, char* ip, int* port)
                     memcpy(ip, url, pos);
                     ip[pos] = '\0';
                 }
-                if (sscanf(url + pos + 1, "%d", port) != 1)
+                if (uv_http_sscanf(url + pos + 1, "%d", port) != 1)
                 {
                     return -1;
                 }
@@ -579,7 +598,7 @@ static void s_uv_http_close_connection(uv_http_conn_t* conn, int cb)
 static void s_uv_http_on_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
 {
     (void)handle;
-    *buf = uv_buf_init(malloc(suggested_size), suggested_size);
+    *buf = uv_buf_init(malloc(suggested_size), (unsigned int)suggested_size);
 }
 
 static void s_uv_http_on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
@@ -895,7 +914,7 @@ static void s_uv_http_on_close(uv_handle_t* handle)
 
 static int s_uv_http_active_connection_send(uv_http_conn_t* conn, uv_http_send_token_t* token)
 {
-    uv_buf_t buf = uv_buf_init(token->data.ptr, token->data.len);
+    uv_buf_t buf = uv_buf_init(token->data.ptr, (unsigned int)token->data.len);
     return uv_write(&token->req, (uv_stream_t *) &conn->client_sock, &buf, 1, s_uv_http_send_cb);
 }
 
@@ -963,7 +982,7 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
     /* last n bytes */
     if (p_minus == p_beg)
     {
-        if (sscanf(p_beg, "-%llu", &a) != 1)
+        if (uv_http_sscanf(p_beg, "-%llu", &a) != 1)
         {
             return UV_EINVAL;
         }
@@ -981,7 +1000,7 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
     /* start from n */
     if (p_minus == p_end)
     {
-        if (sscanf(p_beg, "%llu-", &a) != 1)
+        if (uv_http_sscanf(p_beg, "%llu-", &a) != 1)
         {
             return UV_EINVAL;
         }
@@ -995,7 +1014,7 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
         return 0;
     }
 
-    if (sscanf(p_beg, "%llu-%llu", &a, &b) != 2)
+    if (uv_http_sscanf(p_beg, "%llu-%llu", &a, &b) != 2)
     {
         return UV_EINVAL;
     }
@@ -1012,54 +1031,57 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
 static uv_http_str_t* s_uv_http_guess_content_type(const uv_http_str_t* path)
 {
     static uv_http_header_t s_known_types[] = {
-        { UV_HTTP_CSTR("html"),     UV_HTTP_CSTR("text/html; charset=utf-8") },
-        { UV_HTTP_CSTR("htm"),      UV_HTTP_CSTR("text/html; charset=utf-8") },
-        { UV_HTTP_CSTR("css"),      UV_HTTP_CSTR("text/css; charset=utf-8") },
-        { UV_HTTP_CSTR("js"),       UV_HTTP_CSTR("text/javascript; charset=utf-8") },
-        { UV_HTTP_CSTR("gif"),      UV_HTTP_CSTR("image/gif") },
-        { UV_HTTP_CSTR("png"),      UV_HTTP_CSTR("image/png") },
-        { UV_HTTP_CSTR("jpg"),      UV_HTTP_CSTR("image/jpeg") },
-        { UV_HTTP_CSTR("jpeg"),     UV_HTTP_CSTR("image/jpeg") },
-        { UV_HTTP_CSTR("woff"),     UV_HTTP_CSTR("font/woff") },
-        { UV_HTTP_CSTR("ttf"),      UV_HTTP_CSTR("font/ttf") },
-        { UV_HTTP_CSTR("svg"),      UV_HTTP_CSTR("image/svg+xml") },
-        { UV_HTTP_CSTR("txt"),      UV_HTTP_CSTR("text/plain; charset=utf-8") },
-        { UV_HTTP_CSTR("avi"),      UV_HTTP_CSTR("video/x-msvideo") },
-        { UV_HTTP_CSTR("csv"),      UV_HTTP_CSTR("text/csv") },
-        { UV_HTTP_CSTR("doc"),      UV_HTTP_CSTR("application/msword") },
-        { UV_HTTP_CSTR("exe"),      UV_HTTP_CSTR("application/octet-stream") },
-        { UV_HTTP_CSTR("gz"),       UV_HTTP_CSTR("application/gzip") },
-        { UV_HTTP_CSTR("ico"),      UV_HTTP_CSTR("image/x-icon") },
-        { UV_HTTP_CSTR("json"),     UV_HTTP_CSTR("application/json") },
-        { UV_HTTP_CSTR("mov"),      UV_HTTP_CSTR("video/quicktime") },
-        { UV_HTTP_CSTR("mp3"),      UV_HTTP_CSTR("audio/mpeg") },
-        { UV_HTTP_CSTR("mp4"),      UV_HTTP_CSTR("video/mp4") },
-        { UV_HTTP_CSTR("mpeg"),     UV_HTTP_CSTR("video/mpeg") },
-        { UV_HTTP_CSTR("pdf"),      UV_HTTP_CSTR("application/pdf") },
-        { UV_HTTP_CSTR("shtml"),    UV_HTTP_CSTR("text/html; charset=utf-8") },
-        { UV_HTTP_CSTR("tgz"),      UV_HTTP_CSTR("application/tar-gz") },
-        { UV_HTTP_CSTR("wav"),      UV_HTTP_CSTR("audio/wav") },
-        { UV_HTTP_CSTR("webp"),     UV_HTTP_CSTR("image/webp") },
-        { UV_HTTP_CSTR("zip"),      UV_HTTP_CSTR("application/zip") },
-        { UV_HTTP_CSTR("3gp"),      UV_HTTP_CSTR("video/3gpp") },
+        { UV_HTTP_CSTR(".html"),     UV_HTTP_CSTR("text/html; charset=utf-8") },
+        { UV_HTTP_CSTR(".htm"),      UV_HTTP_CSTR("text/html; charset=utf-8") },
+        { UV_HTTP_CSTR(".css"),      UV_HTTP_CSTR("text/css; charset=utf-8") },
+        { UV_HTTP_CSTR(".js"),       UV_HTTP_CSTR("text/javascript; charset=utf-8") },
+        { UV_HTTP_CSTR(".gif"),      UV_HTTP_CSTR("image/gif") },
+        { UV_HTTP_CSTR(".png"),      UV_HTTP_CSTR("image/png") },
+        { UV_HTTP_CSTR(".jpg"),      UV_HTTP_CSTR("image/jpeg") },
+        { UV_HTTP_CSTR(".jpeg"),     UV_HTTP_CSTR("image/jpeg") },
+        { UV_HTTP_CSTR(".woff"),     UV_HTTP_CSTR("font/woff") },
+        { UV_HTTP_CSTR(".ttf"),      UV_HTTP_CSTR("font/ttf") },
+        { UV_HTTP_CSTR(".svg"),      UV_HTTP_CSTR("image/svg+xml") },
+        { UV_HTTP_CSTR(".txt"),      UV_HTTP_CSTR("text/plain; charset=utf-8") },
+        { UV_HTTP_CSTR(".avi"),      UV_HTTP_CSTR("video/x-msvideo") },
+        { UV_HTTP_CSTR(".csv"),      UV_HTTP_CSTR("text/csv") },
+        { UV_HTTP_CSTR(".doc"),      UV_HTTP_CSTR("application/msword") },
+        { UV_HTTP_CSTR(".exe"),      UV_HTTP_CSTR("application/octet-stream") },
+        { UV_HTTP_CSTR(".gz"),       UV_HTTP_CSTR("application/gzip") },
+        { UV_HTTP_CSTR(".ico"),      UV_HTTP_CSTR("image/x-icon") },
+        { UV_HTTP_CSTR(".json"),     UV_HTTP_CSTR("application/json") },
+        { UV_HTTP_CSTR(".mov"),      UV_HTTP_CSTR("video/quicktime") },
+        { UV_HTTP_CSTR(".mp3"),      UV_HTTP_CSTR("audio/mpeg") },
+        { UV_HTTP_CSTR(".mp4"),      UV_HTTP_CSTR("video/mp4") },
+        { UV_HTTP_CSTR(".mpeg"),     UV_HTTP_CSTR("video/mpeg") },
+        { UV_HTTP_CSTR(".pdf"),      UV_HTTP_CSTR("application/pdf") },
+        { UV_HTTP_CSTR(".shtml"),    UV_HTTP_CSTR("text/html; charset=utf-8") },
+        { UV_HTTP_CSTR(".tgz"),      UV_HTTP_CSTR("application/tar-gz") },
+        { UV_HTTP_CSTR(".wav"),      UV_HTTP_CSTR("audio/wav") },
+        { UV_HTTP_CSTR(".webp"),     UV_HTTP_CSTR("image/webp") },
+        { UV_HTTP_CSTR(".zip"),      UV_HTTP_CSTR("application/zip") },
+        { UV_HTTP_CSTR(".3gp"),      UV_HTTP_CSTR("video/3gpp") },
     };
 
-    uv_http_str_t bak_path = *path;
-
-    size_t i = 0;
-    for (; i < path->len && path->ptr[path->len - i - 1] != '.'; i++);
-    bak_path.ptr += bak_path.len - i;
-    bak_path.len = i;
-
+    size_t i;
     for (i = 0; i < ARRAY_SIZE(s_known_types); i++)
     {
-        if (strcmp(bak_path.ptr, s_known_types[i].name.ptr) == 0)
+        uv_http_header_t* rec = &s_known_types[i];
+        if (path->len < rec->name.len)
         {
-            return &s_known_types[i].value;
+            continue;
         }
+
+        size_t pos = path->len - rec->name.len;
+        if (memcmp(path->ptr + pos, rec->name.ptr, rec->name.len) != 0)
+        {
+            continue;
+        }
+
+        return &rec->value;
     }
 
-    static uv_http_str_t s_default_content_type = UV_HTTP_CSTR("text/plain; charset=utf-8");
+    static uv_http_str_t s_default_content_type = UV_HTTP_CSTR("application/octet-stream");
     return &s_default_content_type;
 }
 
