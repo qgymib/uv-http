@@ -1,11 +1,8 @@
 #include "uv-http.h"
-#include <cutest.h>
+#include "test.h"
+#include "utils/fs.h"
 #include <stdlib.h>
 #include <string.h>
-
-#if defined(_WIN32)
-#   define PATH_MAX MAX_PATH
-#endif
 
 typedef struct test_file_server
 {
@@ -34,6 +31,7 @@ static void s_test_file_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
 
         uv_http_serve_cfg_t cfg; memset(&cfg, 0, sizeof(cfg));
         cfg.root_path = s_test_file_server->exe_path;
+        cfg.fs = uv_http_test_new_fs();
 
         ASSERT_EQ_D32(uv_http_serve_file(conn, msg, &cfg), 0);
     }

@@ -17,6 +17,10 @@
 #endif
 #endif
 
+#if defined(_WIN32)
+#   define PATH_MAX MAX_PATH
+#endif
+
 #include <cutest.h>
 
 #endif
