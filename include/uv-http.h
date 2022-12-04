@@ -233,27 +233,25 @@ int uv_http_send(uv_http_conn_t* conn, const void* data, size_t size);
  * @param[in] conn          HTTP connection.
  * @param[in] method        HTTP request method.
  * @param[in] url           HTTP request url.
- * @param[in] body          Request body.
- * @param[in] body_sz       Request body size.
- * @param[in] header_fmt    Extra header format.
- * @param[in] ...           Extra header format argument list.
+ * @param[in] headers       Extra headers. If not NULL, must end with `\r\n`.
+ * @param[in] body_fmt      Body format.
+ * @param[in] ...           Body format argument list.
  * @return                  UV error code.
  */
 int uv_http_query(uv_http_conn_t* conn, const char* method, const char* url,
-    const void* body, size_t body_sz, const char* header_fmt, ...);
+    const char* headers, const char* body_fmt, ...);
 
 /**
  * @brief Send HTTP response.
  * @param[in] conn          HTTP connection.
  * @param[in] status_code   HTTP response code.
- * @param[in] body          Body data.
- * @param[in] body_sz       Body length in bytes.
- * @param[in] header_fmt    Extra header format. If not NULL, must end with `\r\n`.
- * @param[in] ...           Extra header argument list.
+ * @param[in] headers       Extra headers. If not NULL, must end with `\r\n`.
+ * @param[in] body_fmt      Body format.
+ * @param[in] ...           Body format argument list.
  * @return                  UV error code.
  */
 int uv_http_reply(uv_http_conn_t* conn, int status_code,
-    const void* body, size_t body_sz, const char* header_fmt, ...);
+    const char* headers, const char* body_fmt, ...);
 
 /**
  * @brief Generate serve dir response message.

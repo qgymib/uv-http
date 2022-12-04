@@ -32,7 +32,7 @@ static void s_test_echo_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
         }
 
         const char* hw = "hello world";
-        ASSERT_EQ_D32(0, uv_http_reply(conn, 200, hw, strlen(hw), NULL));
+        ASSERT_EQ_D32(0, uv_http_reply(conn, 200, NULL, "%s", hw));
     }
 }
 
@@ -43,7 +43,7 @@ static void s_test_echo_server_on_connect(uv_http_conn_t* conn, uv_http_event_t 
 
     if (evt == UV_HTTP_CONNECT)
     {
-        ASSERT_EQ_D32(0, uv_http_query(conn, "GET", "/", NULL, 0, NULL));
+        ASSERT_EQ_D32(0, uv_http_query(conn, "GET", "/", NULL, NULL));
         return;
     }
 
@@ -51,7 +51,7 @@ static void s_test_echo_server_on_connect(uv_http_conn_t* conn, uv_http_event_t 
     {
         uv_http_message_t* msg = evt_data;
         ASSERT_EQ_STR(msg->body.ptr, "hello world");
-        ASSERT_EQ_D32(0, uv_http_query(conn, "POST", "/exit", NULL, 0, NULL));
+        ASSERT_EQ_D32(0, uv_http_query(conn, "POST", "/exit", NULL, NULL));
         return;
     }
 }
@@ -84,7 +84,7 @@ TEST_F(simple_server, 1)
         s_test_echo_server_on_listen, s_test_simple_server));
 
     /* Start client. */
-    char buffer[64];
+    char buffer[128];
     ASSERT_LT_D32(0, uv_http_get_listen_url(&s_test_simple_server->http,
         buffer, sizeof(buffer)));
     ASSERT_EQ_D32(0, uv_http_connect(&s_test_simple_server->http, buffer,
