@@ -7,6 +7,11 @@
 #include <inttypes.h>
 
 /**
+ * @brief Static initializer for #uv_http_str_t.
+ */
+#define UV_HTTP_STR_INIT    { NULL, 0, 0 }
+
+/**
  * @brief Declare a constant string.
  * @param[in] x     Constant c string.
  */
@@ -78,7 +83,7 @@ typedef struct uv_http_serve_token_s
     uv_http_str_t               page404;        /**< Path to 404 page. No need to free. */
     uv_http_str_t               if_none_match;  /**< Value of `If-None-Match`. No need to free. */
     uv_http_str_t               range;          /**< Value of `Range`. No need to free. */
-    uv_http_fs_t*               fs;             /**< Filesystem instance. */
+    uv_http_fs_t*               fs;             /**< File system instance. */
 
     uv_http_str_t               rsp;            /**< Response message. MUST free. */
     void*                       fd;             /**< File descriptor for read. */
@@ -96,7 +101,7 @@ typedef struct uv_http_action_s
     union
     {
         uv_http_send_token_t    send;           /**< Send data token. */
-        uv_http_serve_token_t   serve;          /**< Serve filesystem token. */
+        uv_http_serve_token_t   serve;          /**< Serve file system token. */
     } as;
 } uv_http_action_t;
 
@@ -104,11 +109,11 @@ struct uv_http_conn_s
 {
     uv_http_list_node_t         c_node;         /**< Node for #uv_http_t::client_table */
 
-    uv_http_t*                  belong;         /**< Http instance. */
+    uv_http_t*                  belong;         /**< HTTP instance. */
     uv_tcp_t                    client_sock;    /**< Client socket. */
 
-    llhttp_t                    parser;         /**< Http parser */
-    llhttp_settings_t           parser_setting; /**< Http parser settings */
+    llhttp_t                    parser;         /**< HTTP parser */
+    llhttp_settings_t           parser_setting; /**< HTTP parser settings */
     uv_http_message_t*          on_parsing;     /**< The message we are processing. */
 
     uv_connect_t                connect_req;    /**< Connect request. */

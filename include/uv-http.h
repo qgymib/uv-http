@@ -7,11 +7,6 @@
 extern "C" {
 #endif
 
-/**
- * @brief Static initializer for #uv_http_str_t.
- */
-#define UV_HTTP_STR_INIT    { NULL, 0, 0 }
-
 typedef struct uv_http_s uv_http_t;
 typedef struct uv_http_conn_s uv_http_conn_t;
 
@@ -291,7 +286,7 @@ uv_http_str_t* uv_http_get_header(uv_http_message_t* msg, const char* name);
 /**
  * @brief Get listen address.
  * @param[in] http  HTTP Component instance.
- * @param[out] buf  Buffer to store ip.
+ * @param[out] buf  Buffer to store IP.
  * @param[in] size  Buffer size.
  * @return          UV error code.
  */
@@ -299,10 +294,10 @@ int uv_http_get_listen_address(uv_http_t* http, char* buf, size_t size, int* por
 
 /**
  * @brief Get listen url.
- * @param http
- * @param buf
- * @param size
- * @return
+ * @param[in] http  HTTP Component instance.
+ * @param[out] buf  Buffer to store URL.
+ * @param[in] size  Buffer size.
+ * @return          The number of bytes should written, or UV error code.
  */
 int uv_http_get_listen_url(uv_http_t* http, char* buf, size_t size);
 
