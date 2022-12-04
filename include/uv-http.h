@@ -79,12 +79,68 @@ typedef struct uv_http_fs
      */
     void (*release)(struct uv_http_fs* self);
 
+    /**
+     * @brief Stat path.
+     * @param[in] self      This object.
+     * @param[in] path      Path to file or directory.
+     * @param[out] size     Size of file or directory.
+     * @param[out] mtime    Modify time.
+     * @return              Bit-OR of #uv_http_fs_flag_t.
+     */
     int (*stat)(struct uv_http_fs* self, const char* path, size_t* size, time_t* mtime);
+
+    /**
+     * @brief List file and directory in \p path.
+     * @param[in] self      This object.
+     * @param[in] path      Path to directory.
+     * @param[in] cb        Callback.
+     * @param[in] arg       User defined argument passed to \p cb.
+     */
     void (*ls)(struct uv_http_fs* self, const char* path, void (*cb)(const char* path, void* arg), void* arg);
+
+    /**
+     * @brief Open file.
+     * @param[in] self      This object.
+     * @param[in] path      File path.
+     * @param[in] flags     Bit-OR of #uv_http_fs_flag_t.
+     * @return              File handle.
+     */
     void* (*open)(struct uv_http_fs* self, const char* path, int flags);
+
+    /**
+     * @brief Close file.
+     * @param[in] self      This object.
+     * @param[in] fd        File handle.
+     */
     void (*close)(struct uv_http_fs* self, void* fd);
+
+    /**
+     * @brief Read file.
+     * @param[in] self      This object.
+     * @param[in] fd        File handle.
+     * @param[in] buf       Buffer to store file content.
+     * @param[in] size      Buffer size.
+     * @return              The number of bytes read, or UV error code.
+     */
     int (*read)(struct uv_http_fs* self, void* fd, void* buf, size_t size);
-    int (*write)(struct uv_http_fs* self, void* fd, void* buf, size_t size);
+
+    /**
+     * @brief Write file.
+     * @param[in] self      This object.
+     * @param[in] fd        File handle.
+     * @param[in] buf       Buffer to write.
+     * @param[in] size      Buffer size.
+     * @return              The number of bytes write, or UV error code.
+     */
+    int (*write)(struct uv_http_fs* self, void* fd, const void* buf, size_t size);
+
+    /**
+     * @brief Seek file.
+     * @param[in] self      This object.
+     * @param[in] fd        File handle.
+     * @param[in] offset    Offset from file begining.
+     * @return              UV error code.
+     */
     int (*seek)(struct uv_http_fs* self, void* fd, size_t offset);
 } uv_http_fs_t;
 

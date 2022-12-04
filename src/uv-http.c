@@ -404,7 +404,7 @@ static int s_uv_http_fs_read(struct uv_http_fs* self, void* fd, void* buf, size_
     return (int)fread(buf, 1, size, (FILE*)fd);
 }
 
-static int s_uv_http_fs_write(struct uv_http_fs* self, void* fd, void* buf, size_t size)
+static int s_uv_http_fs_write(struct uv_http_fs* self, void* fd, const void* buf, size_t size)
 {
     (void)self;
     return (int)fwrite(buf, 1, size, (FILE*)fd);
