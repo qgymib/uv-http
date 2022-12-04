@@ -74,6 +74,7 @@ typedef struct uv_http_serve_token_s
     uv_http_str_t               root_path;      /**< Root path. No need to free. */
     uv_http_str_t               ssi_pattern;    /**< SSI. No need to free. */
     uv_http_str_t               extra_headers;  /**< Extra headers. No need to free. */
+    uv_http_str_t               mime_types;     /**< MIME. No need to free. */
     uv_http_str_t               page404;        /**< Path to 404 page. No need to free. */
     uv_http_str_t               if_none_match;  /**< Value of `If-None-Match`. No need to free. */
     uv_http_str_t               range;          /**< Value of `Range`. No need to free. */
@@ -1028,7 +1029,77 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
     return 0;
 }
 
-static uv_http_str_t* s_uv_http_guess_content_type(const uv_http_str_t* path)
+static int s_uv_http_str_split(const uv_http_str_t* str, uv_http_str_t* k, uv_http_str_t* v, char s)
+{
+    size_t i;
+    for (i = 0; i < str->len; i++)
+    {
+        if (str->ptr[i] == s)
+        {
+            if (k != NULL)
+            {
+				k->ptr = str->ptr;
+				k->len = i;
+				k->cap = 0;
+            }
+            
+            if (v != NULL)
+            {
+				v->ptr = str->ptr + i + 1;
+				v->len = str->len - i - 1;
+				v->cap = 0;
+            }
+
+            return 0;
+        }
+    }
+
+    return UV_ENOENT;
+}
+
+/**
+ * @brief Check if \p str end with \p pat.
+ * @param[in] str   The string to check.
+ * @param[in] pat   The pattern.
+ * @return          boolean.
+ */
+static int s_uv_http_str_end_with(const uv_http_str_t* str, const uv_http_str_t* pat)
+{
+    if (str->len < pat->len)
+    {
+        return 0;
+    }
+
+    size_t pos = str->len - pat->len;
+    return memcmp(str->ptr + pos, pat->ptr, pat->len) == 0;
+}
+
+static int s_uv_http_guess_content_type_from_mime(const uv_http_str_t* path, const uv_http_str_t* mime,  uv_http_str_t* dst)
+{
+    int ret = 0;
+    uv_http_str_t mime_bak = *mime;
+
+    while (ret == 0)
+    {
+		uv_http_str_t k, v;
+		if ((ret = s_uv_http_str_split(&mime_bak, &k, &v, '=')) != 0)
+		{
+			return ret;
+		}
+
+		ret = s_uv_http_str_split(&v, &v, &mime_bak, ',');
+
+		if (s_uv_http_str_end_with(path, &k))
+		{
+			*dst = v;
+			return 0;
+		}
+    }
+
+    return UV_ENOENT;
+}
+
+static int s_uv_http_guess_content_type(const uv_http_str_t* path, const uv_http_str_t* mime, uv_http_str_t* dst)
 {
     static uv_http_header_t s_known_types[] = {
         { UV_HTTP_CSTR(".html"),     UV_HTTP_CSTR("text/html; charset=utf-8") },
@@ -1063,26 +1134,26 @@ static uv_http_str_t* s_uv_http_guess_content_type(const uv_http_str_t* path)
         { UV_HTTP_CSTR(".3gp"),      UV_HTTP_CSTR("video/3gpp") },
     };
 
+    /* First try user provide mime. */
+    if (s_uv_http_guess_content_type_from_mime(path, mime, dst) == 0)
+    {
+        return 0;
+    }
+
+    /* Try to match predefined mime. */
     size_t i;
     for (i = 0; i < ARRAY_SIZE(s_known_types); i++)
     {
         uv_http_header_t* rec = &s_known_types[i];
-        if (path->len < rec->name.len)
+        if (s_uv_http_str_end_with(path, &rec->name))
         {
-            continue;
+            *dst = rec->value;
+            return 0;
         }
-
-        size_t pos = path->len - rec->name.len;
-        if (memcmp(path->ptr + pos, rec->name.ptr, rec->name.len) != 0)
-        {
-            continue;
-        }
-
-        return &rec->value;
     }
 
-    static uv_http_str_t s_default_content_type = UV_HTTP_CSTR("application/octet-stream");
-    return &s_default_content_type;
+    *dst = (uv_http_str_t)UV_HTTP_CSTR("application/octet-stream");
+    return 0;
 }
 
 static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* token, uv_http_str_t* file)
@@ -1109,7 +1180,8 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
     }
 
     size_t content_length = size;
-    uv_http_str_t* mime = s_uv_http_guess_content_type(file);
+    uv_http_str_t mime = UV_HTTP_STR_INIT;
+    s_uv_http_guess_content_type(file, &token->mime_types, &mime);
 
     /* Check etag. */
     snprintf(etag, sizeof(etag), "\"%lld.%lld\"", (long long)mtime, (long long)size);
@@ -1154,7 +1226,7 @@ static int s_uv_http_active_connection_serve_file_once(uv_http_serve_token_t* to
         "%.*s"
         "\r\n",
         status_code, s_uv_http_status_code_str(status_code),
-        (int) mime->len, mime->ptr,
+        (int) mime.len, mime.ptr,
         etag,
         content_length,
         range,
@@ -1721,13 +1793,14 @@ static int s_uv_http_serve(uv_http_conn_t* conn, uv_http_message_t* msg,
     size_t root_path_len = strlen(cfg->root_path);
     size_t ssi_pattern_len = cfg->ssi_pattern != NULL ? strlen(cfg->ssi_pattern) : 0;
     size_t extra_headers_len = cfg->extra_headers != NULL ? strlen(cfg->extra_headers) : 0;
+    size_t mime_types_len = cfg->mime_types != NULL ? strlen(cfg->mime_types) : 0;
     size_t page404_len = cfg->page404 != NULL ? strlen(cfg->page404) : 0;
     size_t if_none_match_len = if_none_match->len ;
     size_t range_len = range->len;
 
     size_t malloc_size = sizeof(uv_http_action_t) + msg->method.len + 1 + msg->url.len + 1
-        + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1 + page404_len + 1
-        + if_none_match_len + 1 + range_len + 1;
+        + root_path_len + 1 + ssi_pattern_len + 1 + extra_headers_len + 1
+        + mime_types_len + 1 + page404_len + 1 + if_none_match_len + 1 + range_len + 1;
     uv_http_action_t* action = malloc(malloc_size);
     if (action == NULL)
     {
@@ -1774,6 +1847,13 @@ static int s_uv_http_serve(uv_http_conn_t* conn, uv_http_message_t* msg,
     memcpy(action->as.serve.extra_headers.ptr, cfg->extra_headers, extra_headers_len);
     action->as.serve.extra_headers.ptr[extra_headers_len] = '\0';
     pos += extra_headers_len + 1;
+
+    action->as.serve.mime_types.cap = 0;
+    action->as.serve.mime_types.len = mime_types_len;
+    action->as.serve.mime_types.ptr = pos;
+    memcpy(action->as.serve.mime_types.ptr, cfg->mime_types, mime_types_len);
+    action->as.serve.mime_types.ptr[mime_types_len] = '\0';
+    pos += mime_types_len + 1;
 
     action->as.serve.page404.cap = 0;
     action->as.serve.page404.len = page404_len;

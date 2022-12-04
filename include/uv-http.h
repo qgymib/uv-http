@@ -93,6 +93,7 @@ typedef struct uv_http_serve_cfg
     const char*                 root_path;          /**< Web root directory, must be non-NULL. */
     const char*                 ssi_pattern;        /**< (Optional) SSI file name pattern. */
     const char*                 extra_headers;      /**< (Optional) Extra HTTP headers to add in responses. */
+    const char*                 mime_types;         /**< (Optional) Extra mime types */
     const char*                 page404;            /**< (Optional) Path to the 404 page. */
     uv_http_fs_t*               fs;                 /**< (Optional) Filesystem instance. */
 } uv_http_serve_cfg_t;
