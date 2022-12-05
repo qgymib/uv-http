@@ -1032,24 +1032,27 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
     return 0;
 }
 
-static int s_uv_http_str_split(const uv_http_str_t* str, uv_http_str_t* k, uv_http_str_t* v, char s)
+static int s_uv_http_str_split(const uv_http_str_t* str, uv_http_str_t* k,
+    uv_http_str_t* v, const char* s)
 {
     size_t i;
-    for (i = 0; i < str->len; i++)
+    size_t s_len = strlen(s);
+
+    for (i = 0; i < str->len - s_len + 1; i++)
     {
-        if (str->ptr[i] == s)
+        if (memcmp(str->ptr + i, s, s_len) == 0)
         {
             if (k != NULL)
             {
-				k->ptr = str->ptr;
-				k->len = i;
-				k->cap = 0;
+                k->ptr = str->ptr;
+                k->len = i;
+                k->cap = 0;
             }
-            
+
             if (v != NULL)
             {
-				v->ptr = str->ptr + i + 1;
-				v->len = str->len - i - 1;
+				v->ptr = str->ptr + i + s_len;
+				v->len = str->len - i - s_len;
 				v->cap = 0;
             }
 
@@ -1085,12 +1088,12 @@ static int s_uv_http_guess_content_type_from_mime(const uv_http_str_t* path, con
     while (ret == 0)
     {
 		uv_http_str_t k, v;
-		if ((ret = s_uv_http_str_split(&mime_bak, &k, &v, '=')) != 0)
+		if ((ret = s_uv_http_str_split(&mime_bak, &k, &v, "=")) != 0)
 		{
 			return ret;
 		}
 
-		ret = s_uv_http_str_split(&v, &v, &mime_bak, ',');
+		ret = s_uv_http_str_split(&v, &v, &mime_bak, ",");
 
 		if (s_uv_http_str_end_with(path, &k))
 		{

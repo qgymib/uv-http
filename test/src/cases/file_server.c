@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TEST_FILE_SERVER_MIME   "text/plain; charset=utf-8"
+
 typedef struct test_file_server
 {
     uv_loop_t       loop;
@@ -31,7 +33,7 @@ static void s_test_file_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
 
         uv_http_serve_cfg_t cfg; memset(&cfg, 0, sizeof(cfg));
         cfg.root_path = s_test_file_server->exe_path;
-        cfg.mime_types = "=text/plain; charset=utf-8";
+        cfg.mime_types = "=" TEST_FILE_SERVER_MIME;
         cfg.fs = uv_http_test_new_fs();
 
         ASSERT_EQ_D32(uv_http_serve_file(conn, msg, &cfg), 0);
@@ -53,6 +55,9 @@ static void s_test_file_server_on_connect(uv_http_conn_t* conn, uv_http_event_t 
         uv_http_message_t* msg = evt_data;
         ASSERT_EQ_U32(msg->body.len, s_test_file_server->exe_len);
         ASSERT_EQ_D32(memcmp(msg->body.ptr, s_test_file_server->exe_dat, msg->body.len), 0);
+
+        uv_http_str_t* hdr = uv_http_get_header(msg, "Content-Type");
+        ASSERT_EQ_STR(hdr->ptr, TEST_FILE_SERVER_MIME);
 
         ASSERT_EQ_D32(0, uv_http_query(conn, "POST", "/exit", NULL, NULL));
         return;
