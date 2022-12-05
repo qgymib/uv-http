@@ -241,9 +241,17 @@ static int s_uv_http_str_ensure_size(uv_http_str_t* str, size_t size)
         return 0;
     }
 
-    size_t aligned_size = ALIGN_WITH(size + 1, sizeof(void*));
-    size_t double_cap = str->cap << 1;
-    size_t new_cap_plus_one = aligned_size > double_cap ? aligned_size : double_cap;
+    size_t new_cap_plus_one;
+    if (size > UV_HTTP_IO_SIZE)
+    {
+        new_cap_plus_one = ALIGN_WITH(size + 1, 4096);
+    }
+    else
+    {
+		size_t aligned_size = ALIGN_WITH(size + 1, sizeof(void*));
+		size_t double_cap = str->cap << 1;
+		new_cap_plus_one = aligned_size > double_cap ? aligned_size : double_cap;
+    }
 
     void* new_ptr = realloc(str->ptr, new_cap_plus_one);
     if (new_ptr == NULL)
