@@ -1454,7 +1454,7 @@ static int s_uv_http_active_connection_serve_dir(uv_http_serve_token_t* token,
     size_t pos = token->rsp.len;
 
     ret = s_uv_http_str_printf(&token->rsp,
-        "<!DOCTYPE html><html><head><title>Index of %.*s</title>%s%s"
+        "<!DOCTYPE html><html><head><title>Index of %.*s</title>%s"
         "<style>th,td {text-align: left; padding-right: 1em; "
         "font-family: monospace; }</style></head>"
         "<body><h1>Index of %.*s</h1><table cellpadding=\"0\"><thead>"

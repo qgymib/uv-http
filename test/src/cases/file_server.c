@@ -62,7 +62,6 @@ static void s_test_file_server_on_connect(uv_http_conn_t* conn, uv_http_event_t 
 TEST_FIXTURE_SETUP(file_server)
 {
     s_test_file_server = malloc(sizeof(test_file_server_t));
-    memset(s_test_file_server, 0, sizeof(*s_test_file_server));
 
     ASSERT_EQ_D32(uv_loop_init(&s_test_file_server->loop), 0);
     ASSERT_EQ_D32(uv_http_init(&s_test_file_server->http, &s_test_file_server->loop), 0);
