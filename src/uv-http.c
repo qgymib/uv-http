@@ -617,18 +617,20 @@ static void s_uv_http_on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t
 
     if (nread < 0)
     {
+        s_uv_http_callback(conn, UV_HTTP_ERROR, (void*)uv_strerror((int)nread));
         s_uv_http_close_connection(conn, 1);
+        free(buf->base);
         return;
     }
 
     ret = llhttp_execute(&conn->parser, buf->base, nread);
-    free(buf->base);
-
     if (ret != 0)
     {
+        s_uv_http_callback(conn, UV_HTTP_ERROR, (void*)llhttp_errno_name(ret));
         s_uv_http_close_connection(conn, 1);
-        return;
     }
+
+    free(buf->base);
 }
 
 static int s_uv_http_on_parser_ensure_headers(uv_http_message_t* msg)
@@ -1453,7 +1455,7 @@ static int s_uv_http_active_connection_serve_dir(uv_http_serve_token_t* token,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "%.*s"
-        "Content-Length:         \r\n\r\n",
+        "Content-Length:           \r\n\r\n",
         (int)token->extra_headers.len, token->extra_headers.ptr);
     if (ret < 0)
     {

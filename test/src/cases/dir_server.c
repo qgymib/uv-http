@@ -1,6 +1,8 @@
 #include "uv-http.h"
 #include "test.h"
 #include "utils/fs.h"
+#include <stdlib.h>
+#include <string.h>
 
 typedef struct test_dir_server
 {
@@ -25,6 +27,25 @@ static void s_test_dir_server_on_listen(uv_http_conn_t* conn, uv_http_event_t ev
 		}
 
 		ASSERT_EQ_D32(uv_http_serve_dir(conn, msg, &s_test_dir_server->cfg), 0);
+		return;
+	}
+}
+
+static void s_test_dir_server_on_connect(uv_http_conn_t* conn, uv_http_event_t evt,
+	void* evt_data, void* arg)
+{
+	(void)arg;
+	if (evt == UV_HTTP_CONNECT)
+	{
+		ASSERT_EQ_D32(0, uv_http_query(conn, "GET", "/", NULL, NULL));
+		return;
+	}
+
+	if (evt == UV_HTTP_MESSAGE)
+	{
+		uv_http_message_t* msg = evt_data;
+		ASSERT_NE_PTR(strstr(msg->body.ptr, "Index of /"), NULL);
+		ASSERT_EQ_D32(0, uv_http_query(conn, "POST", "/exit", NULL, NULL));
 		return;
 	}
 }
@@ -56,6 +77,12 @@ TEST_F(dir_server, 0)
 
 	ASSERT_EQ_D32(0, uv_http_listen(&s_test_dir_server->http, url,
 		s_test_dir_server_on_listen, NULL));
+
+	char buffer[128];
+	ASSERT_LT_D32(0, uv_http_get_listen_url(&s_test_dir_server->http,
+		buffer, sizeof(buffer)));
+	ASSERT_EQ_D32(0, uv_http_connect(&s_test_dir_server->http, buffer,
+		s_test_dir_server_on_connect, NULL));
 
 	uv_run(&s_test_dir_server->loop, UV_RUN_DEFAULT);
 }

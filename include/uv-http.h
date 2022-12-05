@@ -15,8 +15,8 @@ typedef enum uv_http_event
     UV_HTTP_ERROR,      /**< (const char*) Error. */
     UV_HTTP_CONNECT,    /**< Connection establish. */
     UV_HTTP_ACCEPT,     /**< Connection accept. */
-    UV_HTTP_MESSAGE,    /**< (#uv_http_message_t) HTTP request/response */
     UV_HTTP_CLOSE,      /**< Connection closed. */
+    UV_HTTP_MESSAGE,    /**< (#uv_http_message_t) HTTP request/response */
 } uv_http_event_t;
 
 typedef enum uv_http_fs_flag
