@@ -459,7 +459,7 @@ static int s_uv_http_str_append_c(uv_http_str_t* str, char c)
     return 0;
 }
 
-static void s_uv_http_default_cb(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_uv_http_default_cb(uv_http_conn_t* conn, int evt,
     void* evt_data, void* arg)
 {
     (void)conn; (void)evt; (void)evt_data; (void)arg;

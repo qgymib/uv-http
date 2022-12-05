@@ -17,7 +17,7 @@ static void s_test_echo_server_on_http_exit(uv_http_t* http)
     ASSERT_EQ_PTR(ctx, s_test_simple_server);
 }
 
-static void s_test_echo_server_on_listen(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_echo_server_on_listen(uv_http_conn_t* conn, int evt,
     void* evt_data, void* arg)
 {
     ASSERT_EQ_PTR(arg, s_test_simple_server);
@@ -36,7 +36,7 @@ static void s_test_echo_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
     }
 }
 
-static void s_test_echo_server_on_connect(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_echo_server_on_connect(uv_http_conn_t* conn, int evt,
     void* evt_data, void* arg)
 {
     ASSERT_EQ_PTR(arg, s_test_simple_server);

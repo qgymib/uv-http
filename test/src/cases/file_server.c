@@ -18,7 +18,7 @@ typedef struct test_file_server
 
 static test_file_server_t* s_test_file_server = NULL;
 
-static void s_test_file_server_on_listen(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_file_server_on_listen(uv_http_conn_t* conn, int evt,
     void* evt_data, void* arg)
 {
     (void)arg;
@@ -40,7 +40,7 @@ static void s_test_file_server_on_listen(uv_http_conn_t* conn, uv_http_event_t e
     }
 }
 
-static void s_test_file_server_on_connect(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_file_server_on_connect(uv_http_conn_t* conn, int evt,
     void* evt_data, void* arg)
 {
     (void)arg;

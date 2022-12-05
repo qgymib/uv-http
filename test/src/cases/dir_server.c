@@ -13,7 +13,7 @@ typedef struct test_dir_server
 
 static test_dir_server_t* s_test_dir_server = NULL;
 
-static void s_test_dir_server_on_listen(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_dir_server_on_listen(uv_http_conn_t* conn, int evt,
 	void* evt_data, void* arg)
 {
 	(void)arg;
@@ -31,7 +31,7 @@ static void s_test_dir_server_on_listen(uv_http_conn_t* conn, uv_http_event_t ev
 	}
 }
 
-static void s_test_dir_server_on_connect(uv_http_conn_t* conn, uv_http_event_t evt,
+static void s_test_dir_server_on_connect(uv_http_conn_t* conn, int evt,
 	void* evt_data, void* arg)
 {
 	(void)arg;

@@ -156,8 +156,7 @@ typedef struct uv_http_serve_cfg
  * @param[in] evt_data  Event data.
  * @param[in] arg       User defined argument.
  */
-typedef void (*uv_http_cb)(uv_http_conn_t* conn, uv_http_event_t evt,
-    void* evt_data, void* arg);
+typedef void (*uv_http_cb)(uv_http_conn_t* conn, int evt, void* evt_data, void* arg);
 
 /**
  * @brief HTTP close callback.
