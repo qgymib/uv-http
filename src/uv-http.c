@@ -210,18 +210,6 @@ static uv_http_list_node_t* ev_list_begin(const uv_http_list_t* handler)
     return handler->head;
 }
 
-static uv_http_list_node_t* ev_list_pop_front(uv_http_list_t* handler)
-{
-    uv_http_list_node_t * node = handler->head;
-    if (node == NULL)
-    {
-        return NULL;
-    }
-
-    ev_list_erase(handler, node);
-    return node;
-}
-
 /**
  * @brief Ensure \p str have enough capacity for \p size.
  * @param[in] str   String container.
