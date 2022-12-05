@@ -454,6 +454,7 @@ static int s_uv_http_str_append_c(uv_http_str_t* str, char c)
 
     str->ptr[str->len] = c;
     str->ptr[required_size] = '\0';
+    str->len++;
 
     return 0;
 }
@@ -1033,12 +1034,16 @@ static int s_uv_http_parse_range(const uv_http_str_t* str, size_t size,
 }
 
 static int s_uv_http_str_split(const uv_http_str_t* str, uv_http_str_t* k,
-    uv_http_str_t* v, const char* s)
+    uv_http_str_t* v, const char* s, size_t offset)
 {
     size_t i;
     size_t s_len = strlen(s);
+    if (str->len < s_len)
+    {
+        goto error;
+    }
 
-    for (i = 0; i < str->len - s_len + 1; i++)
+    for (i = offset; i < str->len - s_len + 1; i++)
     {
         if (memcmp(str->ptr + i, s, s_len) == 0)
         {
@@ -1060,6 +1065,7 @@ static int s_uv_http_str_split(const uv_http_str_t* str, uv_http_str_t* k,
         }
     }
 
+error:
     return UV_ENOENT;
 }
 
@@ -1088,12 +1094,12 @@ static int s_uv_http_guess_content_type_from_mime(const uv_http_str_t* path, con
     while (ret == 0)
     {
 		uv_http_str_t k, v;
-		if ((ret = s_uv_http_str_split(&mime_bak, &k, &v, "=")) != 0)
+		if ((ret = s_uv_http_str_split(&mime_bak, &k, &v, "=", 0)) != 0)
 		{
 			return ret;
 		}
 
-		ret = s_uv_http_str_split(&v, &v, &mime_bak, ",");
+		ret = s_uv_http_str_split(&v, &v, &mime_bak, ",", 0);
 
 		if (s_uv_http_str_end_with(path, &k))
 		{
@@ -1644,6 +1650,32 @@ error:
     s_uv_http_close_connection(conn, 1);
 }
 
+static void s_uv_http_remove_double_dot_url(uv_http_str_t* url)
+{
+    size_t offset = 0;
+    uv_http_str_t k, v;
+    while (s_uv_http_str_split(url, &k, &v, "/..", offset) == 0)
+    {
+        /* double-dot is last part of url */
+        if (v.len == 0)
+        {
+            k.ptr[k.len] = '\0';
+            url->len = k.len;
+            break;
+        }
+
+        /* Skip condition that not `/../` */
+        if (v.ptr[0] != '/')
+        {
+            offset = k.len + 3;
+            continue;
+        }
+
+        memmove(k.ptr + k.len, v.ptr, v.len);
+        url->len -= 3;
+    }
+}
+
 static void s_uv_http_active_connection_serve_work(uv_work_t* req)
 {
     uv_http_serve_token_t* token = container_of(req, uv_http_serve_token_t, as.work_req);
@@ -1656,18 +1688,27 @@ static void s_uv_http_active_connection_serve_work(uv_work_t* req)
         return;
     }
 
-    /* Let's check what user want. */
-    int flags = fs->stat(fs, token->url.ptr, NULL, NULL);
+    s_uv_http_remove_double_dot_url(&token->url);
 
-    /* If it is a directory, list entry. */
+    uv_http_str_t require_path = UV_HTTP_STR_INIT;
+    s_uv_http_str_printf(&require_path, "%.*s/%.*s",
+        (int)token->root_path.len, token->root_path.ptr,
+        (int)token->url.len, token->url.ptr);
+
+    /* Let's check what user want. */
+    int flags = fs->stat(fs, require_path.ptr, NULL, NULL);
+
     if (flags & UV_HTTP_FS_DIR)
-    {
-        s_uv_http_active_connection_serve_dir(token, &token->url);
+    {/* If it is a directory, list entry. */
+        s_uv_http_active_connection_serve_dir(token, &require_path);
         return;
     }
+    else
+    {/* If it is a file, serve with file support. */
+        s_uv_http_active_connection_serve_file(token, &require_path);
+    }
 
-    /* If it is a file, serve with file support. */
-    s_uv_http_active_connection_serve_file(token, &token->url);
+    s_uv_http_str_destroy(&require_path);
 }
 
 static void s_uv_http_serve_on_send_rsp(uv_write_t* req, int status)

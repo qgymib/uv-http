@@ -18,6 +18,12 @@ static void s_test_dir_server_on_listen(uv_http_conn_t* conn, uv_http_event_t ev
 	if (evt == UV_HTTP_MESSAGE)
 	{
 		uv_http_message_t* msg = evt_data;
+		if (strcmp(msg->url.ptr, "/exit") == 0)
+		{
+			uv_stop(&s_test_dir_server->loop);
+			return;
+		}
+
 		ASSERT_EQ_D32(uv_http_serve_dir(conn, msg, &s_test_dir_server->cfg), 0);
 		return;
 	}
